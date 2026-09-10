@@ -1,0 +1,329 @@
+name: Build LongPlayUpdater v2
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install SDK 34
+        run: sdkmanager "platforms;android-34" "build-tools;34.0.0"
+
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.2'
+
+      - name: Create project
+        run: |
+          rm -rf project
+          mkdir -p project/app/src/main/java/com/longkaca/playupdater
+          mkdir -p project/app/src/main/res/values
+
+          cat > project/settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+
+          rootProject.name = "LongPlayUpdaterV2"
+          include(":app")
+          EOF
+
+          cat > project/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.2.2' apply false
+          }
+          EOF
+
+          cat > project/gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          EOF
+
+          cat > project/app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+
+          android {
+              namespace 'com.longkaca.playupdater'
+              compileSdk 34
+
+              defaultConfig {
+                  applicationId 'com.longkaca.playupdater'
+                  minSdk 31
+                  targetSdk 34
+                  versionCode 2
+                  versionName '2.0'
+              }
+          }
+
+          dependencies {
+              implementation 'com.google.android.gms:play-services-base:18.5.0'
+          }
+          EOF
+
+          cat > project/app/src/main/res/values/strings.xml <<'EOF'
+          <resources>
+              <string name="app_name">Long Play Updater</string>
+          </resources>
+          EOF
+
+          cat > project/app/src/main/res/values/styles.xml <<'EOF'
+          <resources>
+              <style name="AppTheme" parent="android:style/Theme.Material.Light.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:windowLightStatusBar">true</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > project/app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+              <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+
+              <queries>
+                  <package android:name="com.google.android.gms" />
+                  <package android:name="com.android.vending" />
+              </queries>
+
+              <application
+                  android:allowBackup="false"
+                  android:label="@string/app_name"
+                  android:theme="@style/AppTheme">
+
+                  <activity
+                      android:name=".MainActivity"
+                      android:exported="true"
+                      android:launchMode="singleTask">
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+
+                      <intent-filter>
+                          <action android:name="android.intent.action.VIEW" />
+                          <category android:name="android.intent.category.DEFAULT" />
+                          <category android:name="android.intent.category.BROWSABLE" />
+                          <data
+                              android:scheme="longplay"
+                              android:host="update" />
+                      </intent-filter>
+
+                  </activity>
+
+              </application>
+          </manifest>
+          EOF
+
+          cat > project/app/src/main/java/com/longkaca/playupdater/MainActivity.java <<'EOF'
+          package com.longkaca.playupdater;
+
+          import android.app.Activity;
+          import android.content.ActivityNotFoundException;
+          import android.content.Intent;
+          import android.graphics.Color;
+          import android.net.ConnectivityManager;
+          import android.net.Network;
+          import android.net.NetworkCapabilities;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.view.Gravity;
+          import android.widget.LinearLayout;
+          import android.widget.TextView;
+
+          import com.google.android.gms.common.ConnectionResult;
+          import com.google.android.gms.common.GoogleApiAvailability;
+
+          public class MainActivity extends Activity {
+
+              private TextView status;
+              private boolean running = false;
+
+              @Override
+              protected void onCreate(Bundle savedInstanceState) {
+                  super.onCreate(savedInstanceState);
+
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setGravity(Gravity.CENTER);
+                  root.setPadding(48, 48, 48, 48);
+
+                  status = new TextView(this);
+                  status.setTextSize(22);
+                  status.setTextColor(Color.BLACK);
+                  status.setGravity(Gravity.CENTER);
+                  status.setText("Đang kiểm tra Google Play services...");
+                  root.addView(status);
+
+                  setContentView(root);
+                  runCheck();
+              }
+
+              @Override
+              protected void onNewIntent(Intent intent) {
+                  super.onNewIntent(intent);
+                  setIntent(intent);
+                  running = false;
+                  runCheck();
+              }
+
+              private void runCheck() {
+                  if (running) return;
+                  running = true;
+
+                  if (!hasInternetNetwork()) {
+                      status.setText(
+                          "Chưa có mạng. Hãy bật Wi-Fi hoặc 4G/5G rồi quét QR lại."
+                      );
+                      running = false;
+                      return;
+                  }
+
+                  GoogleApiAvailability api =
+                      GoogleApiAvailability.getInstance();
+
+                  int result =
+                      api.isGooglePlayServicesAvailable(this);
+
+                  if (result == ConnectionResult.SUCCESS) {
+                      status.setText(
+                          "Google Play services đang hoạt động.\n" +
+                          "Đang mở CH Play kiểm tra cập nhật..."
+                      );
+
+                      openGooglePlayServicesPage();
+                      return;
+                  }
+
+                  if (api.isUserResolvableError(result)) {
+                      status.setText(
+                          "Google Play services cần cập nhật hoặc sửa.\n" +
+                          "Đang mở luồng Google..."
+                      );
+
+                      Intent resolution =
+                          api.getErrorResolutionIntent(
+                              this,
+                              result,
+                              "longplay_v2"
+                          );
+
+                      if (resolution != null) {
+                          try {
+                              startActivity(resolution);
+                              return;
+                          } catch (Exception ignored) {
+                          }
+                      }
+
+                      openGooglePlayServicesPage();
+                      return;
+                  }
+
+                  status.setText(
+                      "Không xử lý tự động được trên ROM này.\n" +
+                      "Mã lỗi: " + result
+                  );
+
+                  openGooglePlayServicesPage();
+              }
+
+              private boolean hasInternetNetwork() {
+                  try {
+                      ConnectivityManager cm =
+                          (ConnectivityManager)
+                              getSystemService(CONNECTIVITY_SERVICE);
+
+                      if (cm == null) return false;
+
+                      Network network =
+                          cm.getActiveNetwork();
+
+                      if (network == null) return false;
+
+                      NetworkCapabilities caps =
+                          cm.getNetworkCapabilities(network);
+
+                      return caps != null &&
+                          caps.hasCapability(
+                              NetworkCapabilities.NET_CAPABILITY_INTERNET
+                          );
+
+                  } catch (Exception e) {
+                      return true;
+                  }
+              }
+
+              private void openGooglePlayServicesPage() {
+                  try {
+                      Intent market =
+                          new Intent(
+                              Intent.ACTION_VIEW,
+                              Uri.parse(
+                                  "market://details?id=com.google.android.gms"
+                              )
+                          );
+
+                      market.setPackage("com.android.vending");
+
+                      startActivity(market);
+
+                  } catch (ActivityNotFoundException e) {
+
+                      try {
+                          startActivity(
+                              new Intent(
+                                  Intent.ACTION_VIEW,
+                                  Uri.parse(
+                                      "https://play.google.com/store/apps/details?id=com.google.android.gms"
+                                  )
+                              )
+                          );
+
+                      } catch (Exception ex) {
+                          status.setText("Không mở được CH Play.");
+                      }
+                  }
+              }
+          }
+          EOF
+
+      - name: Build APK
+        run: |
+          cd project
+          gradle :app:assembleDebug --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: LongPlayUpdater-v2-APK
+          path: project/app/build/outputs/apk/debug/app-debug.apk
